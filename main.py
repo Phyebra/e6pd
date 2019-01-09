@@ -236,7 +236,7 @@ while True:
                                     downloaded += 1
 
                                     # Change title
-                                    title = 'title e6pd: Downloading: ' + str(round(downloaded/pool_pages*100)) + '%'
+                                    title = 'title e6pd: Downloading: ' + str(round((downloaded/pool_pages)*100)) + '%'
                                     os.system(title)
 
 
