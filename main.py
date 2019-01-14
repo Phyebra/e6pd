@@ -1,4 +1,13 @@
-import re, requests, urllib.request, sys, pathlib, os, copy, time
+import re
+import requests
+import urllib.request
+import sys
+import pathlib
+import os
+import copy
+import time
+import hashlib
+import pathlib
 
 # Colour terminal support check
 try:
@@ -26,7 +35,7 @@ except ImportError:
         RESET = ''
 
 # Requests headers
-headers = {'user-agent': 'pool-downloader/v0.x'}
+headers = {'user-agent': 'e6pd/0.1a-devel -> github/phyebra'}
 
 # Startup help menu
 print(Back.BLUE + "For the integrated help menu, type --help" + Back.RESET)
@@ -45,6 +54,16 @@ def rmCommand(string):
     string.pop(0)
     string = ' '.join(string)
     return string
+
+# Memory efficient hashing [22058048]
+def get_md5(filename):
+    md5 = hashlib.md5()
+    b = bytearray(128*1024)
+    mv = memoryview(b)
+    with open(filename, 'rb', buffering=0) as f:
+        for n in iter(lambda : f.readinto(mv), 0):
+            md5.update(mv[:n])
+    return md5.hexdigest()
 
 # Prefer SI (Posix) or Binary (Windows)?
 mbyte = 1024*1024
@@ -65,7 +84,7 @@ raw_mode = False
 while True:
     
     # Startup title
-    os.system("title e621 pool downloader version 0")
+    os.system("title e6pd v0.1a")
     
     # Input
     if raw_mode == True:
@@ -125,9 +144,9 @@ while True:
             
             # Convert spaces if specified earlier
             if convert_spaces == True: 
-                pool_name = re.sub(r'[^\w\-_\. ]', '_', str(data['name'].replace('_', ' ')))
+                pool_name = re.sub(r'[^\w\-_\. ]', ',', str(data['name'].replace('_', ' ')))
             else:
-                pool_name = re.sub(r'[^\w\-_\. ]', '_', str(data['name']))
+                pool_name = re.sub(r'[^\w\-_\. ]', ',', str(data['name']))
 
             # Get number of pages
             pool_pages = data['post_count']
@@ -165,7 +184,7 @@ while True:
                         total_req = pool_pages // 24 + 1
 
                     # Tell the user
-                    print("# of requests to make:", total_req)
+                    # print("# of requests to make:", total_req)
 
                     # Before downloading, create a list of download links.
                     download_req = 0
@@ -173,9 +192,11 @@ while True:
                     # Dictonary containing the metadata of every page, including tags, download link, etc.
                     pool_meta = list()
                     pool_artists = set()
-
+                    
                     for current_page in range(1, total_req+1, 1): 
-                        print("Fetching data:", current_page)
+                        if current_page == 1:
+                            print("", end='')
+                        print("\rFetching data:", current_page, "of", total_req, end='')
                         req = show_url + str(x) + '&page=' + str(current_page)
                         
                         # Prevent fast requests from hitting the API request limit
@@ -201,6 +222,7 @@ while True:
                     pool_artists = list(pool_artists)
 
                     # Completion, warning about possibly very large file sizes.
+                    print()
                     print(Fore.GREEN + '<--->\tMetadata for', len(pool_meta), 'posts cached.' + Fore.RESET)
                     print(Back.BLUE + " LARGE FILE WARNING " + Back.RESET)
                     print("This download will consume approximately " + Back.BLUE + str(round(download_req/mbyte, 2)) + " MB" + Back.RESET + " of disk space.")
@@ -212,9 +234,13 @@ while True:
                         
                         # Check if there's only one artist. If so, put it in the folder name.
                         if len(pool_artists) == 1:
-                            pool_path = ''.join([os.getcwd(), "\\", str(x), " - ", str(pool_artists[0]), " - ", str(pool_name)])
+                            # Check if the artist name is already mentioned.
+                            if pool_artists[0].lower() in pool_name.lower():
+                                pool_path = pathlib.Path(os.getcwd(), (str(x) + " - " + str(pool_name)))
+                            else:
+                                pool_path = pathlib.Path(os.getcwd(), (str(x) + " (" + str(pool_artists[0]) + ") " + str(pool_name)))
                         else:
-                            pool_path = ''.join([os.getcwd(), "\\", str(x), " - ", str(pool_name)])
+                            pool_path = pathlib.Path(os.getcwd(), (str(x) + " - " + str(pool_name)))
                         
                         # Prepare folders for download. To change the name of the containing folder, modify pool_path.
                         pathlib.Path(pool_path).mkdir(parents=True, exist_ok=True)
@@ -224,13 +250,39 @@ while True:
                         # Iterate through every entry created earlier to download the entire pool.
                         for page in pool_meta:
                                     
-                                    # Change these values to modify the final filename.
-                                    filename = str(page['id']) + "." + str(page['file_ext'])
-                                    save_path = pool_path + "/" + filename
+                                    # Expected hash
+                                    expected_hash = page['md5']
                                     
-                                    # User output
-                                    print("Fetching ", round(page['file_size']/mbyte, 2), "MB, saving as:", filename)
-                                    urllib.request.urlretrieve(page['file_url'], save_path)
+                                    # Actual page # for pools not uploaded in time order
+                                    page_num = pool_meta.index(page)
+                                    
+                                    # Change these values to modify the final filename.
+                                    # Default is written as follows: <page> - <name> - <hash>.<ext>
+                                    # For instance, 1 - Generic Comic - e9cea3ec8a2cf43e053d9971910f84b2.png
+                                    filename = str(page_num + 1) + " - " + str(pool_name) + " - " + str(expected_hash) + "." + str(page['file_ext'])
+                                    save_path = pathlib.Path(pool_path, filename)
+                                    
+                                    # print("Expected MD5:", expected_hash)
+                                    print()
+                                    msg = ''
+
+                                    for i in range(3):
+                                        try:
+                                            print("Fetching", round(page['file_size']/mbyte, 2), "Mb - File:", filename, end='')
+                                            # print(pool_path, save_path)
+                                            urllib.request.urlretrieve(page['file_url'], save_path)
+                                            
+                                            if get_md5(save_path) == expected_hash:
+                                                print(" " + Back.GREEN + " OK " + Back.RESET, end='')
+                                            else:
+                                                print(" " + Back.RED + " Hash Error " + Back.RESET, end='')
+                                                
+                                                continue
+
+                                        except urllib.error.URLError:
+                                            print(" " + Back.RED + " Con. Error " + Back.RESET, end='')
+                                            continue
+                                        break
                                     
                                     # For progress bar
                                     downloaded += 1
@@ -238,37 +290,6 @@ while True:
                                     # Change title
                                     title = 'title e6pd: Downloading: ' + str(round((downloaded/pool_pages)*100)) + '%'
                                     os.system(title)
-
-
-                    """for current_page in range(1, total_req+1, 1):
-                        
-                        print("Page:", current_page)
-                        resp = None
-                        req = show_url + str(x) + '&page=' + str(current_page)
-                        print("Sending:", req)
-                        resp = requests.get(req, headers=headers)
-                        if resp.ok:
-                            
-                            # Calculate section download requirements.
-                            download_req = 0
-                            for page in data['posts']:
-                                all_tags = all_tags | set(page['tags'].split(' '))
-                                download_req += page['file_size']
-                            
-                            data = resp.json()
-                            try:
-                                print(Back.RED + "This section will consume approximately ", round(download_req/mbyte, 2), ' MB of disk space.' + Back.RESET, sep='')
-                                pool_path = ''.join([os.getcwd() + "\\" + str(x) + " - ", pool_name])
-                                print(pool_path)
-                                pathlib.Path(pool_path).mkdir(parents=True, exist_ok=True)
-                                for page in data['posts']:
-                                    filename = str(page['id']) + "." + str(page['file_ext'])
-                                    save_path = pool_path + "/" + filename
-                                    print("Fetching ", round(page['file_size']/mbyte, 2), "MB, saving as:", filename, " -src: ", page['file_url'])
-                                    urllib.request.urlretrieve(page['file_url'], save_path)
-                            except PermissionError:
-                                print("Permission denied writing to program path! Try a different folder.")
-                        print("Download of page", current_page, "complete.")"""
                 
                 if user == 'tags':
                     # print a list of all tags found on the first (up to 24) pages.
