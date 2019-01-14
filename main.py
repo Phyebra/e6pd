@@ -65,6 +65,25 @@ def get_md5(filename):
             md5.update(mv[:n])
     return md5.hexdigest()
 
+def get_safe(url, headers, num_retries=3, timeout=5):
+    for _ in range(3):
+        try:
+            resp = requests.get(url, headers=headers)
+            if resp.ok:
+                return resp
+            else:
+                print("Status Error")
+                continue
+        except requests.exceptions.ConnectTimeout:
+            print("Connection timed out")
+            continue
+        except requests.exceptions.ConnectionError:
+            print("Connection error")
+            continue
+    
+    raise ConnectionError
+    
+
 # Prefer SI (Posix) or Binary (Windows)?
 mbyte = 1024*1024
 
@@ -80,6 +99,7 @@ index_url = 'https://e621.net/pool/index.json?query='
 
 # Change this parameter to automatically startup in raw input mode
 raw_mode = False
+pass_input = None
 
 while True:
     
@@ -87,7 +107,10 @@ while True:
     os.system("title e6pd v0.1a")
     
     # Input
-    if raw_mode == True:
+    if pass_input != None:
+        x = pass_input
+        pass_input = None
+    elif raw_mode == True:
         print(Back.BLUE + 'Exit raw input mode: --smode' + Back.RESET)
         x = input(Fore.CYAN + "r-> " + Fore.RESET)
         if x == '--smode':
@@ -132,8 +155,7 @@ while True:
     # Unless the user explicity escapes the numbers by typing 'raw'.
     elif (isInteger(x) and '--raw' not in x):
         
-        # Get first 24 pages and associated data.
-        resp = requests.get(show_url + str(x), headers=headers)
+        resp = get_safe(show_url + str(x), headers)
         
         # Check if there's a response. Currently there's no timeout programmed. Wip
         if resp.ok:
@@ -194,15 +216,27 @@ while True:
                     pool_artists = set()
                     
                     for current_page in range(1, total_req+1, 1): 
+                        
                         if current_page == 1:
                             print("", end='')
-                        print("\rFetching data:", current_page, "of", total_req, end='')
+                        print("Fetching data:", current_page, "of", total_req, end='')
                         req = show_url + str(x) + '&page=' + str(current_page)
                         
+
                         # Prevent fast requests from hitting the API request limit
                         last_req = copy.copy(time.time())
                         
-                        resp = requests.get(req, headers=headers)
+                        try:
+                            resp = get_safe(req, headers)
+                            data = resp.json()
+                            print(" " + Back.GREEN + " OK " + Back.RESET)
+                        except requests.exceptions.ConnectTimeout:
+                            print("Connection timed out. Are you connected to the internet?")
+                            continue
+                        except requests.exceptions.ConnectionError:
+                            print("Connection error!")
+                            continue
+                        
                         if resp.ok:   
                             # Look through all the posts in the returned data
                             for page in data['posts']:
@@ -212,10 +246,12 @@ while True:
 
                                 # Make a copy of the current page json data as a list entry in pool_meta.
                                 pool_meta += [copy.deepcopy(page)]
+                                
+                                # print(len(pool_meta), current_page, page['md5'])
 
                         # Delay if 600ms have not yet passed
                         if time.time() - last_req < 0.6:
-                            time.sleep(0.5)
+                            time.sleep(0.6 - (time.time() - last_req))
 
                     # Convert sets to list
                     all_tags = list(all_tags)
@@ -319,10 +355,13 @@ while True:
             x = ' '.join(x)
         search_page = 1
         while True:
-            resp = requests.get(index_url + str(x) + '&page=' + str(search_page), headers=headers)
+            
+            resp = get_safe(index_url + str(x) + '&page=' + str(search_page), headers)
+              
             if resp.ok:
                 
                 data = resp.json()
+                
                 if len(data) == 0:
                     # If the response is empty there probably aren't any more results to show.
                     print("No data to show.")
@@ -342,9 +381,13 @@ while True:
                         print(item['id'], '\t', item['post_count'], '\t', item['name'], sep='')
                 
                 if len(data) == 20:
-                    print(Fore.YELLOW + "...press Enter to keep searching or type anything to cancel.", end='' + Fore.RESET)
+                    print(Fore.YELLOW + "...[Enter] Keep searching, [id] Access Pool ID #, anything else to cancel.", end='' + Fore.RESET)
                     user = input(" > ")
-                    if user != '':
+
+                    if (raw_mode == False) and (isInteger(user)):
+                        pass_input = user
+                        break
+                    elif user != '':
                         break
                     else:
                         search_page += 1
