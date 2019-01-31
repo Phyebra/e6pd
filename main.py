@@ -35,7 +35,7 @@ except ImportError:
         RESET = ''
 
 # Requests headers
-headers = {'user-agent': 'e6pd/0.1a-devel -> github/phyebra'}
+headers = {'user-agent': 'e6pd/0.2a -> github/phyebra'}
 
 # Startup help menu
 print(Back.BLUE + "For the integrated help menu, type --help" + Back.RESET)
@@ -46,6 +46,8 @@ def isInteger(string):
         int(string)
         return True
     except ValueError:
+        return False
+    except TypeError:
         return False
 
 # Temporary parsing out of commands, to be replaced with actual command processing system later
@@ -71,9 +73,14 @@ def get_safe(url, headers, num_retries=3, timeout=5):
             resp = requests.get(url, headers=headers)
             if resp.ok:
                 return resp
+            elif resp.status_code == 404:
+                print("Page not found!")
+                return 404
+            elif resp.status_code == 500:
+                print("Server error")
+                return 500
             else:
-                print("Status Error")
-                continue
+                print("An error occurred while getting data.")
         except requests.exceptions.ConnectTimeout:
             print("Connection timed out")
             continue
@@ -101,10 +108,24 @@ index_url = 'https://e621.net/pool/index.json?query='
 raw_mode = False
 pass_input = None
 
+# Generate a simple progress bar
+def progress(a, b, percent=False, raw=False, segments=18, char='-', ending='>', blank=' '):
+    seg = int(round(a/b* segments))
+    if seg >= segments:
+        seg = segments
+        output = '[' + char*(seg-1) + ending + ']'
+    else:
+        output = '[' + char*(seg-1) + ending + blank*(segments-seg) + ']'
+    if raw == True:
+        output = output + ' ' + str(a) + '/' + str(b)
+    if percent == True:
+        output = output + ' ' + str(round((a/b)*100)) + "%"
+    return output
+
 while True:
     
     # Startup title
-    os.system("title e6pd v0.1a")
+    os.system("title e6pd v0.2a")
     
     # Input
     if pass_input != None:
@@ -156,6 +177,10 @@ while True:
     elif (isInteger(x) and '--raw' not in x):
         
         resp = get_safe(show_url + str(x), headers)
+        
+        # Stop if error occurs.
+        if isInteger(resp):
+            continue
         
         # Check if there's a response. Currently there's no timeout programmed. Wip
         if resp.ok:
@@ -219,7 +244,9 @@ while True:
                         
                         if current_page == 1:
                             print("", end='')
-                        print("Fetching data:", current_page, "of", total_req, end='')
+                        # print("Fetching data:", current_page, "of", total_req, end='')
+                        print('\r', progress(current_page, total_req, True, True, 22), end='', sep='')
+                        # Request
                         req = show_url + str(x) + '&page=' + str(current_page)
                         
 
@@ -229,7 +256,7 @@ while True:
                         try:
                             resp = get_safe(req, headers)
                             data = resp.json()
-                            print(" " + Back.GREEN + " OK " + Back.RESET)
+                            print('\r' + ' '*60, end='', sep='')
                         except requests.exceptions.ConnectTimeout:
                             print("Connection timed out. Are you connected to the internet?")
                             continue
@@ -258,10 +285,12 @@ while True:
                     pool_artists = list(pool_artists)
 
                     # Completion, warning about possibly very large file sizes.
-                    print()
-                    print(Fore.GREEN + '<--->\tMetadata for', len(pool_meta), 'posts cached.' + Fore.RESET)
-                    print(Back.BLUE + " LARGE FILE WARNING " + Back.RESET)
-                    print("This download will consume approximately " + Back.BLUE + str(round(download_req/mbyte, 2)) + " MB" + Back.RESET + " of disk space.")
+                    print('\r' + Fore.GREEN + '<--->\tMetadata for', len(pool_meta), 'posts cached.' + Fore.RESET)
+                    if round(download_req/mbyte, 2) > 20:
+                        print(Back.BLUE + " LARGE FILE WARNING " + Back.RESET)
+                        print("This download will consume approximately " + Back.BLUE + str(round(download_req/mbyte, 2)) + " MB" + Back.RESET + " of disk space.")
+                    else:
+                        print("Ready to download " + str(round(download_req/mbyte, 2)) + " MB.")
                     user = input("Press Enter to continue or type 'n'> ")
                     
                     if user != '':
@@ -272,22 +301,27 @@ while True:
                         if len(pool_artists) == 1:
                             # Check if the artist name is already mentioned.
                             if pool_artists[0].lower() in pool_name.lower():
-                                pool_path = pathlib.Path(os.getcwd(), (str(x) + " - " + str(pool_name)))
+                                pool_path = pathlib.Path(os.getcwd() + '/pool/', (str(x) + " - " + str(pool_name)))
                             else:
-                                pool_path = pathlib.Path(os.getcwd(), (str(x) + " (" + str(pool_artists[0]) + ") " + str(pool_name)))
+                                pool_path = pathlib.Path(os.getcwd()+ '/pool/', (str(x) + " (" + str(pool_artists[0]) + ") " + str(pool_name)))
                         else:
-                            pool_path = pathlib.Path(os.getcwd(), (str(x) + " - " + str(pool_name)))
+                            pool_path = pathlib.Path(os.getcwd()+ '/pool/', (str(x) + " - " + str(pool_name)))
                         
                         # Prepare folders for download. To change the name of the containing folder, modify pool_path.
                         pathlib.Path(pool_path).mkdir(parents=True, exist_ok=True)
                         
                         downloaded = 0
-                        
+                        errors = 0
+                        rate = 0
+
                         # Iterate through every entry created earlier to download the entire pool.
                         for page in pool_meta:
                                     
                                     # Expected hash
                                     expected_hash = page['md5']
+
+                                    # Page file size
+                                    file_size = page['file_size']
                                     
                                     # Actual page # for pools not uploaded in time order
                                     page_num = pool_meta.index(page)
@@ -299,29 +333,57 @@ while True:
                                     save_path = pathlib.Path(pool_path, filename)
                                     
                                     # print("Expected MD5:", expected_hash)
-                                    print()
+                                    # print()
                                     msg = ''
 
+                                    ok = False
+
+
                                     for i in range(3):
+                                        
+                                        start = time.time()
+                                        
                                         try:
-                                            print("Fetching", round(page['file_size']/mbyte, 2), "Mb - File:", filename, end='')
+                                            #print("Fetching", round(page['file_size']/mbyte, 2), "Mb - File:", filename, end='')
                                             # print(pool_path, save_path)
+
+                                            print('\r' + ' '*60 + '\r', end='', sep='')
+                                            print('\r', progress(page_num, len(pool_meta), True, True, 30), end='', sep='')
+
+                                            # print last data rate if available
+                                            if rate != 0:
+                                                print('', rate, 'kbps', end='')
+                                            
+                                            if errors > 0:
+                                                print(' ', Fore.RED, errors, ' error(s).', Fore.RESET, end='', sep='')
+
                                             urllib.request.urlretrieve(page['file_url'], save_path)
                                             
                                             if get_md5(save_path) == expected_hash:
                                                 print(" " + Back.GREEN + " OK " + Back.RESET, end='')
+                                                time.sleep(0.4)
+                                                ok = True
+                                                break
                                             else:
                                                 print(" " + Back.RED + " Hash Error " + Back.RESET, end='')
-                                                
+                                                time.sleep(1)
                                                 continue
 
                                         except urllib.error.URLError:
                                             print(" " + Back.RED + " Con. Error " + Back.RESET, end='')
+                                            time.sleep(3)
                                             continue
+
                                         break
                                     
+                                    # Get rate in kbps
+                                    rate = round(((file_size/1024) / (time.time() - start)) * 8)
+                                    
                                     # For progress bar
-                                    downloaded += 1
+                                    if ok == True:
+                                        downloaded += 1
+                                    else:
+                                        errors += 1
 
                                     # Change title
                                     title = 'title e6pd: Downloading: ' + str(round((downloaded/pool_pages)*100)) + '%'
